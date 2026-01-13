@@ -2,62 +2,118 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
 
-#define ITERATIONS 1000
+#define ITERATIONS 100
+#define BUCKET_COUNT 1024
 
-void run_benchmark(size_t buffer_kb) {
+typedef struct Node {
+    uint64_t value;
+    struct Node* next;
+} Node;
+
+// --- TEST 1: RANDOM SWAP ---
+void do_swap_test(uint64_t* buffer, size_t n) {
+    size_t idxA = rand() % n;
+    size_t idxB = rand() % n;
+    uint64_t temp = buffer[idxA];
+    buffer[idxA] = buffer[idxB];
+    buffer[idxB] = temp;
+}
+
+// --- TEST 2: BUCKET SORT ---
+void do_bucket_sort(uint64_t* buffer, size_t n) {
+    Node* buckets[BUCKET_COUNT] = {NULL};
+    uint64_t max_val = 0;
+    
+    for(size_t i=0; i<n; i++) if(buffer[i] > max_val) max_val = buffer[i];
+
+    for (size_t i = 0; i < n; i++) {
+        int b_idx = (buffer[i] * BUCKET_COUNT) / (max_val + 1);
+        Node* new_node = malloc(sizeof(Node));
+        new_node->value = buffer[i];
+        new_node->next = buckets[b_idx];
+        buckets[b_idx] = new_node;
+    }
+
+    size_t idx = 0;
+    for (int i = 0; i < BUCKET_COUNT; i++) {
+        Node* curr = buckets[i];
+        while (curr) {
+            buffer[idx++] = curr->value;
+            Node* temp = curr;
+            curr = curr->next;
+            free(temp);
+        }
+    }
+}
+
+void run_benchmark(size_t buffer_kb, const char* mode) {
     size_t buffer_size_bytes = buffer_kb * 1024;
-    size_t element_count = buffer_size_bytes / sizeof(uint64_t);
+    size_t n = buffer_size_bytes / sizeof(uint64_t);
     struct timespec start, end;
     
     uint64_t *buffer = malloc(buffer_size_bytes);
-    if (!buffer) {
-        printf("%7zu KB | Allocation Failed\n", buffer_kb);
-        return;
-    }
+    if (!buffer) return;
 
     srand((unsigned int)time(NULL));
 
     clock_gettime(CLOCK_MONOTONIC, &start);
 
     for (int i = 0; i < ITERATIONS; i++) {
-        // Fill (element_count ops)
-        for (size_t j = 0; j < element_count; j++) {
-            buffer[j] = (uint64_t)j;
-        }
+        for (size_t j = 0; j < n; j++) buffer[j] = (uint64_t)rand();
 
-        // Swap (3 ops)
-        size_t idxA = rand() % element_count;
-        size_t idxB = rand() % element_count;
-        uint64_t temp = buffer[idxA];
-        buffer[idxA] = buffer[idxB];
-        buffer[idxB] = temp;
+        if (strcmp(mode, "swap") == 0) {
+            do_swap_test(buffer, n);
+        } else {
+            do_bucket_sort(buffer, n);
+        }
     }
 
     clock_gettime(CLOCK_MONOTONIC, &end);
 
-    double total_time = (end.tv_sec - start.tv_sec) + 
-                        (end.tv_nsec - start.tv_nsec) / 1e9;
-    
-    double avg_time = total_time / ITERATIONS;
-    double ops_per_iteration = (double)element_count + 3;
-    double total_ops = ops_per_iteration * ITERATIONS;
-    double ops_per_sec = total_ops / total_time;
+    double total_time = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    double ops_per_sec = ((double)n * ITERATIONS) / total_time;
 
-    printf("%7zu KB | %12.6f s | %12.9f s | %10.3e\n", 
-           buffer_kb, total_time, avg_time, ops_per_sec);
+    printf("%7zu KB | %10s | %10.4f s | %10.7f s | %10.2e\n", 
+           buffer_kb, mode, total_time, total_time / ITERATIONS, ops_per_sec);
 
     free(buffer);
 }
 
-int main() {
-    printf("Buffer Size |  Total Time   |   Avg/Iter     | Throughput (ops/s)\n");
-    printf("------------|----------------|----------------|-------------------\n");
+void print_help() {
+    printf("Here are the tests you could try:\n");
+    printf("  swap    - Random 64-bit element swaps\n");
+    printf("  bucket  - Full bucket sort (linked-list based)\n");
+    printf("  all     - Runs both tests sequentially\n\n");
+    printf("Usage: ./benchmark [test_name]\n");
+}
 
-    run_benchmark(64);    // 2^13 elements (L1)
-    run_benchmark(512);   // 2^16 elements (L2)
-    run_benchmark(4096);  // 2^19 elements (L3/RAM)
-    run_benchmark(8192);  // 2^20 elements (Deep L3/RAM)
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        print_help();
+        return 1;
+    }
+
+    char* choice = argv[1];
+    int run_swap = (strcmp(choice, "swap") == 0 || strcmp(choice, "all") == 0);
+    int run_bucket = (strcmp(choice, "bucket") == 0 || strcmp(choice, "all") == 0);
+
+    if (!run_swap && !run_bucket) {
+        print_help();
+        return 1;
+    }
+
+    printf("Buffer Size |    Test    | Total Time |  Avg/Iter   | Ops/sec\n");
+    printf("------------|------------|------------|------------|-----------\n");
+
+    size_t sizes[] = {64, 512, 4096, 8192};
+    
+    for(int i = 0; i < 4; i++) {
+        if (run_swap) run_benchmark(sizes[i], "swap");
+        if (run_bucket) run_benchmark(sizes[i], "bucket");
+        if (strcmp(choice, "all") == 0) printf("------------|------------|------------|------------|-----------\n");
+    }
 
     return 0;
 }
